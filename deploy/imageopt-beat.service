@@ -1,0 +1,17 @@
+[Unit]
+Description=Image Optimizer Celery Beat (scheduler)
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/image-optimizer
+EnvironmentFile=/var/www/image-optimizer/.env
+ExecStart=/var/www/image-optimizer/venv/bin/celery \
+    -A app.workers.celery_app beat \
+    --loglevel=info
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

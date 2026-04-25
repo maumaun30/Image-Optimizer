@@ -1,0 +1,39 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            cd /var/www/image-optimizer
+
+            # Pull latest code
+            git pull origin main
+
+            # Install/update Python dependencies
+            source venv/bin/activate
+            pip install -r requirements.txt
+
+            # Run DB migrations
+            alembic upgrade head
+
+            # Reload services (zero-downtime for API)
+            sudo systemctl restart imageopt-worker imageopt-beat
+            sudo systemctl reload-or-restart imageopt-api
+
+            # Confirm API is running
+            sudo systemctl is-active --quiet imageopt-api && echo "API: OK"
+            sudo systemctl is-active --quiet imageopt-worker && echo "Worker: OK"

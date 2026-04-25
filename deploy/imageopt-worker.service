@@ -1,0 +1,18 @@
+[Unit]
+Description=Image Optimizer Celery Worker
+After=network.target mysql.service redis.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/image-optimizer
+EnvironmentFile=/var/www/image-optimizer/.env
+ExecStart=/var/www/image-optimizer/venv/bin/celery \
+    -A app.workers.celery_app worker \
+    --loglevel=info \
+    --concurrency=4
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
