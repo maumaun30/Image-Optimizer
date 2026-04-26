@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # CORS — comma-separated origins, e.g. https://your-app.vercel.app
     CORS_ORIGINS: list[str] = ["*"]
 
-    model_config = {"env_file": ".env"}
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 @lru_cache
