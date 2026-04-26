@@ -9,7 +9,7 @@ WorkingDirectory=/var/www/image-optimizer
 EnvironmentFile=/var/www/image-optimizer/.env
 ExecStart=/var/www/image-optimizer/venv/bin/uvicorn app.main:app \
     --host 127.0.0.1 \
-    --port 8000 \
+    --port 8090 \
     --workers 4 \
     --log-level info
 Restart=always
