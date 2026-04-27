@@ -29,8 +29,16 @@ class ImageJob(Base):
     original_filename = Column(String(255), nullable=False)
     original_path = Column(String(500))
     processed_path = Column(String(500))
-    status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False)
-    output_format = Column(Enum(OutputFormat), default=OutputFormat.WEBP, nullable=False)
+    status = Column(
+        Enum(JobStatus, values_callable=lambda e: [m.value for m in e]),
+        default=JobStatus.PENDING,
+        nullable=False,
+    )
+    output_format = Column(
+        Enum(OutputFormat, values_callable=lambda e: [m.value for m in e]),
+        default=OutputFormat.WEBP,
+        nullable=False,
+    )
     resize_width = Column(Integer)
     original_size_bytes = Column(Integer)
     processed_size_bytes = Column(Integer)
