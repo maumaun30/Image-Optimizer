@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     APP_NAME: str = "Image Optimizer API"
     DEBUG: bool = False
+    APP_PORT: int = 8000
 
     # Database
     DB_HOST: str = "localhost"

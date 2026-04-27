@@ -62,9 +62,9 @@ docker compose up --build
 ## Deployment (Cloud Panel + Nginx)
 
 ```bash
-# On server — first-time setup
-git clone <repo> /var/www/image-optimizer
-cd /var/www/image-optimizer
+# On server — first-time setup (Cloud Panel site root)
+git clone <repo> /home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com
+cd /home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

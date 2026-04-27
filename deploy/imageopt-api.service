@@ -3,13 +3,13 @@ Description=Image Optimizer API (uvicorn)
 After=network.target mysql.service redis.service
 
 [Service]
-User=www-data
-Group=www-data
-WorkingDirectory=/var/www/image-optimizer
-EnvironmentFile=/var/www/image-optimizer/.env
-ExecStart=/var/www/image-optimizer/venv/bin/uvicorn app.main:app \
+User=quailshack-image-optimizer
+Group=quailshack-image-optimizer
+WorkingDirectory=/home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com
+EnvironmentFile=/home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com/.env
+ExecStart=/home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com/venv/bin/uvicorn app.main:app \
     --host 127.0.0.1 \
-    --port 8090 \
+    --port ${APP_PORT} \
     --workers 4 \
     --log-level info
 Restart=always
