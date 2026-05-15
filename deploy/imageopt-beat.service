@@ -2,9 +2,9 @@
 Description=Image Optimizer Celery Beat (scheduler)
 After=network-online.target mysql.service redis-server.service
 Wants=network-online.target mysql.service redis-server.service
+StartLimitIntervalSec=0
 
 [Service]
-StartLimitIntervalSec=0
 User=quailshack-image-optimizer
 Group=quailshack-image-optimizer
 WorkingDirectory=/home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com
