@@ -57,7 +57,15 @@ docker compose up --build
 | GET | `/images/status/{id}` | Poll job status |
 | GET | `/images/download/{id}` | Download processed image (one-time, auto-deletes) |
 | GET | `/images/jobs` | List all jobs (query: `limit`, `offset`) |
+| POST | `/pdf/upload` | Upload 1-20 PDFs; query param: `level` (screen/ebook/printer/lossless) |
+| GET | `/pdf/status/{id}` | Poll PDF job status |
+| GET | `/pdf/download/{id}` | Download compressed PDF (one-time, auto-deletes) |
+| GET | `/pdf/jobs` | List all PDF jobs (query: `limit`, `offset`) |
 | GET | `/health` | Health check |
+
+### PDF compression
+
+`POST /pdf/upload` queues `process_pdf_task`, which compresses via **Ghostscript** when the `gs` binary is on PATH (downsamples embedded images per preset — `screen`/`ebook`/`printer`), and otherwise falls back to **pikepdf** lossless structural compression. The `lossless` level always uses pikepdf. PDF jobs live in the `pdf_jobs` table and share the same status flow, auto-delete, and hourly cleanup as image jobs. The Docker image installs `ghostscript`; on bare-metal, `apt-get install ghostscript` enables the better compression path.
 
 ## Deployment (Cloud Panel + Nginx)
 

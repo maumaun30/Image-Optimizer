@@ -22,6 +22,16 @@ class OutputFormat(str, enum.Enum):
     ORIGINAL = "original"
 
 
+class CompressionLevel(str, enum.Enum):
+    """PDF compression presets. Map to Ghostscript -dPDFSETTINGS when available;
+    `lossless` skips image downsampling and only restructures/compresses streams."""
+
+    SCREEN = "screen"      # 72 dpi — smallest
+    EBOOK = "ebook"        # 150 dpi — balanced (default)
+    PRINTER = "printer"    # 300 dpi — high quality
+    LOSSLESS = "lossless"  # no image downsampling, structural compression only
+
+
 class ImageJob(Base):
     __tablename__ = "image_jobs"
 
@@ -40,6 +50,31 @@ class ImageJob(Base):
         nullable=False,
     )
     resize_width = Column(Integer)
+    original_size_bytes = Column(Integer)
+    processed_size_bytes = Column(Integer)
+    error_message = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+    processed_at = Column(DateTime)
+    downloaded_at = Column(DateTime)
+
+
+class PdfJob(Base):
+    __tablename__ = "pdf_jobs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    original_filename = Column(String(255), nullable=False)
+    original_path = Column(String(500))
+    processed_path = Column(String(500))
+    status = Column(
+        Enum(JobStatus, values_callable=lambda e: [m.value for m in e]),
+        default=JobStatus.PENDING,
+        nullable=False,
+    )
+    compression_level = Column(
+        Enum(CompressionLevel, values_callable=lambda e: [m.value for m in e]),
+        default=CompressionLevel.EBOOK,
+        nullable=False,
+    )
     original_size_bytes = Column(Integer)
     processed_size_bytes = Column(Integer)
     error_message = Column(Text)
