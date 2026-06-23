@@ -43,6 +43,12 @@ async def upload_images(
     width: int | None = Query(
         None, gt=0, le=10000, description="Target width in pixels; aspect ratio is preserved"
     ),
+    quality: int = Query(
+        85,
+        ge=50,
+        le=100,
+        description="Compression quality: 50 = max compression … 100 = lossless",
+    ),
     db: Session = Depends(get_db),
 ):
     if not files:
@@ -80,6 +86,7 @@ async def upload_images(
             status=JobStatus.PENDING,
             output_format=format,
             resize_width=width,
+            quality=quality,
             original_size_bytes=size,
         )
         db.add(job)

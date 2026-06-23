@@ -22,7 +22,13 @@ def process_image(
     resize_width: int | None = None,
     quality: int = 85,
 ) -> tuple[str, int]:
-    """Resize and convert an image. Returns (output_path, size_in_bytes)."""
+    """Resize and convert an image. Returns (output_path, size_in_bytes).
+
+    `quality` ranges 50 (max compression) .. 100 (lossless). At 100 the encoder
+    is switched to lossless mode where the format supports it.
+    """
+
+    lossless = quality >= 100
 
     with Image.open(input_path) as img:
         original_format = img.format  # e.g. "JPEG", "PNG" — may be None after transforms
@@ -56,6 +62,8 @@ def process_image(
         save_kwargs: dict = {"quality": quality}
         if pil_format == "WEBP":
             save_kwargs["method"] = 6
+            if lossless:
+                save_kwargs["lossless"] = True
         elif pil_format == "JPEG":
             save_kwargs["optimize"] = True
             save_kwargs["progressive"] = True
@@ -63,7 +71,8 @@ def process_image(
             save_kwargs.pop("quality")
             save_kwargs["optimize"] = True
         elif pil_format == "AVIF":
-            pass  # quality already set
+            if lossless:
+                save_kwargs["quality"] = 100
 
         img.save(output_path, format=pil_format, **save_kwargs)
 

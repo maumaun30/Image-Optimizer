@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # Cleanup
     AUTO_DELETE_HOURS: int = 24
 
-    # Image processing
+    # Image processing — fallback quality (50 = max compression … 100 = lossless)
     DEFAULT_QUALITY: int = 85
 
     # CORS — comma-separated origins, e.g. https://your-app.vercel.app

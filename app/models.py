@@ -50,6 +50,8 @@ class ImageJob(Base):
         nullable=False,
     )
     resize_width = Column(Integer)
+    # 50 = max compression … 100 = lossless. Default 85.
+    quality = Column(Integer, nullable=False, default=85, server_default="85")
     original_size_bytes = Column(Integer)
     processed_size_bytes = Column(Integer)
     error_message = Column(Text)

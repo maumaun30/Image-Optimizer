@@ -12,6 +12,7 @@ class JobResponse(BaseModel):
     status: JobStatus
     output_format: OutputFormat
     resize_width: Optional[int] = None
+    quality: Optional[int] = None
     original_size_bytes: Optional[int] = None
     processed_size_bytes: Optional[int] = None
     savings_percent: Optional[float] = None

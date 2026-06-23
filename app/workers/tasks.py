@@ -27,7 +27,7 @@ def process_image_task(self, job_id: str):
             output_dir=settings.PROCESSED_DIR,
             output_format=job.output_format,
             resize_width=job.resize_width,
-            quality=settings.DEFAULT_QUALITY,
+            quality=job.quality or settings.DEFAULT_QUALITY,
         )
 
         job.processed_path = output_path

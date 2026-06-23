@@ -53,7 +53,7 @@ docker compose up --build
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/images/upload` | Upload 1-20 images; query params: `format` (webp/avif/original), `width` (int) |
+| POST | `/images/upload` | Upload 1-20 images; query params: `format` (webp/avif/original), `width` (int), `quality` (50-100, default 85; 100 = lossless) |
 | GET | `/images/status/{id}` | Poll job status |
 | GET | `/images/download/{id}` | Download processed image (one-time, auto-deletes) |
 | GET | `/images/jobs` | List all jobs (query: `limit`, `offset`) |
