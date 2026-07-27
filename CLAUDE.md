@@ -28,16 +28,22 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
 # Start dependencies (Docker)
+# db publishes 127.0.0.1:3307 (not 3306) so it can't collide with a local
+# MySQL/MariaDB install — set DB_PORT=3307 in .env for host-side runs.
 docker compose up db redis -d
 
 # Run migrations
 alembic upgrade head
+# python3 -m alembic upgrade head <--> for mac cli
 
 # Start API
 uvicorn app.main:app --reload
 
 # Start worker (separate terminal)
 celery -A app.workers.celery_app worker --loglevel=info
+
+# Start video worker (separate terminal — dedicated queue, one encode at a time)
+celery -A app.workers.celery_app worker --loglevel=info -Q video --concurrency=1
 
 # Start beat scheduler (separate terminal)
 celery -A app.workers.celery_app beat --loglevel=info
@@ -61,11 +67,28 @@ docker compose up --build
 | GET | `/pdf/status/{id}` | Poll PDF job status |
 | GET | `/pdf/download/{id}` | Download compressed PDF (one-time, auto-deletes) |
 | GET | `/pdf/jobs` | List all PDF jobs (query: `limit`, `offset`) |
+| POST | `/video/upload` | Upload 1-5 videos; query params: `preset` (low/balanced/high), `codec` (h264/vp9/av1), `width` (int), `mute` (bool) |
+| GET | `/video/status/{id}` | Poll video job status (includes `progress_percent`) |
+| GET | `/video/download/{id}` | Download compressed video (one-time, auto-deletes) |
+| GET | `/video/jobs` | List all video jobs (query: `limit`, `offset`) |
 | GET | `/health` | Health check |
 
 ### PDF compression
 
 `POST /pdf/upload` queues `process_pdf_task`, which compresses via **Ghostscript** when the `gs` binary is on PATH (downsamples embedded images per preset — `screen`/`ebook`/`printer`), and otherwise falls back to **pikepdf** lossless structural compression. The `lossless` level always uses pikepdf. PDF jobs live in the `pdf_jobs` table and share the same status flow, auto-delete, and hourly cleanup as image jobs. The Docker image installs `ghostscript`; on bare-metal, `apt-get install ghostscript` enables the better compression path.
+
+### Video compression
+
+`POST /video/upload` queues `process_video_task`, which compresses via **ffmpeg**. Unlike PDFs there is **no fallback encoder** — without `ffmpeg` and `ffprobe` on PATH the endpoint returns 503. The Docker image installs `ffmpeg`; on Ubuntu bare-metal, `apt-get install ffmpeg`; on macOS, `brew install ffmpeg`.
+
+Differences from the image/PDF pipelines:
+
+- **Uploads stream to disk** in 4 MB chunks (a 2 GB file must never be read into memory). Limit is `MAX_VIDEO_SIZE_MB` (default 2048), separate from `MAX_FILE_SIZE_MB`.
+- **Progress tracking** — `video_jobs.progress_percent` is written by the worker every ~5 %, parsed from `ffmpeg -progress pipe:1`. Poll `/video/status/{id}`.
+- **Dedicated queue** — video tasks route to the `video` Celery queue, consumed by a separate worker at `--concurrency=1` so encodes can't starve image/PDF jobs. Run it with `celery -A app.workers.celery_app worker -Q video --concurrency=1` (systemd: `imageopt-video-worker`).
+- **No blind retries** — ffmpeg failures (bad input, missing encoder, time limit) fail the job immediately; only unexpected errors retry, at most once. `VIDEO_TIME_LIMIT_SECONDS` (default 7200) kills a runaway encode.
+- Codecs: `h264` → `.mp4` (default, universal, fast), `vp9` → `.webm` (smaller, slower), `av1` → `.mp4` (smallest, much slower; needs a `libsvtav1`-enabled ffmpeg build).
+- Sizes use `BIGINT` — 2 GB overflows MySQL's signed `INT`.
 
 ## Deployment (Cloud Panel + Nginx)
 
@@ -87,8 +110,8 @@ nginx -t && systemctl reload nginx
 # Install systemd services
 cp deploy/*.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable imageopt-api imageopt-worker imageopt-beat
-systemctl start imageopt-api imageopt-worker imageopt-beat
+systemctl enable imageopt-api imageopt-worker imageopt-video-worker imageopt-beat
+systemctl start imageopt-api imageopt-worker imageopt-video-worker imageopt-beat
 ```
 
 ## GitHub Actions secrets required

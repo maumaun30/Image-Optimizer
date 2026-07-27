@@ -20,6 +20,11 @@ celery_app.conf.update(
     task_acks_late=True,
     # One task at a time per worker — image processing is memory-intensive
     worker_prefetch_multiplier=1,
+    # Video encodes peg the CPU for minutes to hours. Keep them off the default queue
+    # so they can't starve image and PDF jobs; a dedicated worker consumes `video`.
+    task_routes={
+        "app.workers.tasks.process_video_task": {"queue": "video"},
+    },
     beat_schedule={
         "cleanup-expired-jobs": {
             "task": "app.workers.tasks.cleanup_expired_jobs",

@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     # Image processing — fallback quality (50 = max compression … 100 = lossless)
     DEFAULT_QUALITY: int = 85
 
+    # Video — separate, much larger limit than images/PDFs
+    MAX_VIDEO_SIZE_MB: int = 2048
+    MAX_VIDEO_FILES: int = 5
+    # Hard ceiling on a single encode; the worker kills ffmpeg past this
+    VIDEO_TIME_LIMIT_SECONDS: int = 7200
+    # Cap ffmpeg CPU use so one encode can't starve the box
+    FFMPEG_THREADS: int = 2
+
     # CORS — comma-separated origins, e.g. https://your-app.vercel.app
     CORS_ORIGINS: list[str] = ["*"]
 

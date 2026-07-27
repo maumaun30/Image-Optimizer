@@ -1,0 +1,23 @@
+[Unit]
+Description=Image Optimizer Celery Worker (video queue)
+After=network-online.target mysql.service redis-server.service
+Wants=network-online.target mysql.service redis-server.service
+StartLimitIntervalSec=0
+
+[Service]
+User=quailshack-image-optimizer
+Group=quailshack-image-optimizer
+WorkingDirectory=/home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com
+EnvironmentFile=/home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com/.env
+ExecStart=/home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com/venv/bin/celery \
+    -A app.workers.celery_app worker \
+    --loglevel=info \
+    --concurrency=1 \
+    --queues=video
+# Encodes are CPU-bound and long-running — keep them out of the way of the API
+Nice=10
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
