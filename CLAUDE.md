@@ -17,8 +17,8 @@ FastAPI service that accepts image uploads, queues optimization jobs via Celery,
 1. `POST /images/upload` — saves files to `uploads/`, creates `ImageJob` rows, dispatches Celery tasks
 2. Celery worker resizes + converts → saves to `processed/`, deletes original upload, marks job `READY`
 3. `GET /images/status/{id}` — poll until `READY`
-4. `GET /images/download/{id}` — streams file, deletes processed file after response, marks job `DOWNLOADED`
-5. Celery Beat runs hourly `cleanup_expired_jobs` to purge stale files older than `AUTO_DELETE_HOURS`
+4. `GET /images/download/{id}` — streams file, marks job `DOWNLOADED`; the file stays re-downloadable for `DOWNLOAD_GRACE_MINUTES` (dropped connections, browser retries)
+5. Celery Beat runs `cleanup_expired_jobs` every 10 min: deletes downloaded files past the grace window, and purges stale files older than `AUTO_DELETE_HOURS`
 
 ## Local dev
 
@@ -61,17 +61,24 @@ docker compose up --build
 |---|---|---|
 | POST | `/images/upload` | Upload 1-20 images; query params: `format` (webp/avif/original), `width` (int), `quality` (50-100, default 85; 100 = lossless) |
 | GET | `/images/status/{id}` | Poll job status |
-| GET | `/images/download/{id}` | Download processed image (one-time, auto-deletes) |
-| GET | `/images/jobs` | List all jobs (query: `limit`, `offset`) |
+| GET | `/images/download/{id}` | Download processed image (re-downloadable for `DOWNLOAD_GRACE_MINUTES`, then deleted) |
+| GET | `/images/jobs` | List all jobs (query: `limit`, `offset`; admin only, `X-Admin-Key`) |
 | POST | `/pdf/upload` | Upload 1-20 PDFs; query param: `level` (screen/ebook/printer/lossless) |
 | GET | `/pdf/status/{id}` | Poll PDF job status |
-| GET | `/pdf/download/{id}` | Download compressed PDF (one-time, auto-deletes) |
-| GET | `/pdf/jobs` | List all PDF jobs (query: `limit`, `offset`) |
+| GET | `/pdf/download/{id}` | Download compressed PDF (same grace window as images) |
+| GET | `/pdf/jobs` | List all PDF jobs (query: `limit`, `offset`; admin only) |
 | POST | `/video/upload` | Upload 1-5 videos; query params: `preset` (low/balanced/high), `codec` (h264/vp9/av1), `width` (int), `mute` (bool) |
 | GET | `/video/status/{id}` | Poll video job status (includes `progress_percent`) |
-| GET | `/video/download/{id}` | Download compressed video (one-time, auto-deletes) |
-| GET | `/video/jobs` | List all video jobs (query: `limit`, `offset`) |
+| GET | `/video/download/{id}` | Download compressed video (same grace window as images) |
+| GET | `/video/jobs` | List all video jobs (query: `limit`, `offset`; admin only) |
 | GET | `/health` | Health check |
+
+### Abuse limits
+
+- **`/*/jobs` listings** expose every user's filenames and downloadable job IDs, so they answer 404 unless `ADMIN_API_KEY` is set, and 401 without a matching `X-Admin-Key` header.
+- **Per-IP upload rate limits** live in nginx (`limit_req` zones in `nginx/nginx.conf`). Behind Cloudflare they need `nginx/cloudflare-realip.conf` copied to `/etc/nginx/snippets/`, or every visitor shares the few Cloudflare edge IPs.
+- **Capacity backstop** in the app: uploads get 503 when `MAX_QUEUED_JOBS` / `MAX_QUEUED_VIDEOS` jobs are pending or processing, or free disk falls below `MIN_FREE_DISK_MB`.
+- **Uploads stream to disk** for every type and are sniffed from their bytes (Pillow for images, `%PDF-` header for PDFs; ffprobe in the worker for video). Corrupt inputs fail without retries.
 
 ### PDF compression
 
@@ -104,6 +111,7 @@ alembic upgrade head
 
 # Copy nginx config
 cp nginx/nginx.conf /etc/nginx/sites-available/imageopt
+cp nginx/cloudflare-realip.conf /etc/nginx/snippets/   # required: nginx.conf includes it
 ln -s /etc/nginx/sites-available/imageopt /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
 

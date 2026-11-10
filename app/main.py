@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,8 +8,15 @@ from app.config import settings
 from app.routers import images, pdf, video
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if "*" in settings.CORS_ORIGINS and not settings.DEBUG:
+        logger.warning(
+            "CORS_ORIGINS allows any origin. Set it to the frontend URL in production."
+        )
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     settings.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     yield

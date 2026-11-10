@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     # Cap ffmpeg CPU use so one encode can't starve the box
     FFMPEG_THREADS: int = 2
 
+    # Downloads stay available this long after the first one (dropped connections,
+    # browser retries), then the cleanup task deletes the file
+    DOWNLOAD_GRACE_MINUTES: int = 30
+
+    # Abuse backstops — uploads get 503 past these (per-IP limits live in nginx)
+    MAX_QUEUED_JOBS: int = 200
+    MAX_QUEUED_VIDEOS: int = 20
+    MIN_FREE_DISK_MB: int = 5120
+
+    # Enables the /*/jobs listing endpoints (sent as X-Admin-Key). Unset = disabled.
+    ADMIN_API_KEY: str = ""
+
     # CORS — comma-separated origins, e.g. https://your-app.vercel.app
     CORS_ORIGINS: list[str] = ["*"]
 

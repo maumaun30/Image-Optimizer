@@ -1,17 +1,17 @@
-import os
 import uuid
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session
-from starlette.background import BackgroundTask
 
 from app.config import settings
 from app.database import get_db
 from app.models import ImageJob, JobStatus, OutputFormat
 from app.schemas import JobListResponse, JobResponse, UploadResponse
+from app.uploads import check_capacity, delete_files, downloadable_path, require_admin, save_upload
 from app.workers.tasks import process_image_task
 
 router = APIRouter(prefix="/images", tags=["images"])
@@ -26,14 +26,21 @@ ALLOWED_CONTENT_TYPES = {
     "image/avif",
 }
 
+# What Pillow must detect from the file's own bytes; the client's content type is
+# only a first filter and is trivially spoofed.
+ALLOWED_PIL_FORMATS = {"JPEG", "PNG", "GIF", "BMP", "TIFF", "WEBP", "AVIF", "MPO"}
 
-def _delete_files(*paths: str | None) -> None:
-    for path in paths:
-        if path:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+
+def _check_is_image(path: Path, filename: str | None) -> None:
+    try:
+        with Image.open(path) as img:  # parses the header only, no full decode
+            detected = img.format
+    except Image.DecompressionBombError:
+        raise HTTPException(400, f"File '{filename}' has too many pixels")
+    except (UnidentifiedImageError, OSError):
+        raise HTTPException(400, f"File '{filename}' is not a valid image")
+    if detected not in ALLOWED_PIL_FORMATS:
+        raise HTTPException(400, f"File '{filename}' has unsupported format {detected}")
 
 
 @router.post("/upload", response_model=UploadResponse, status_code=202)
@@ -56,42 +63,46 @@ async def upload_images(
     if len(files) > 20:
         raise HTTPException(400, "Maximum 20 files per request")
 
+    check_capacity(db, ImageJob, settings.MAX_QUEUED_JOBS, len(files))
+
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     settings.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     jobs: list[ImageJob] = []
+    written_paths: list[Path] = []
 
-    for file in files:
-        if file.content_type not in ALLOWED_CONTENT_TYPES:
-            raise HTTPException(400, f"Unsupported file type: {file.content_type}")
+    try:
+        for file in files:
+            if file.content_type not in ALLOWED_CONTENT_TYPES:
+                raise HTTPException(400, f"Unsupported file type: {file.content_type}")
 
-        content = await file.read()
-        size = len(content)
+            job_id = str(uuid.uuid4())
+            ext = Path(file.filename or "image").suffix.lower() or ".jpg"
+            upload_path = settings.UPLOAD_DIR / f"{job_id}{ext}"
+            written_paths.append(upload_path)
 
-        if size > settings.MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise HTTPException(
-                400, f"File '{file.filename}' exceeds {settings.MAX_FILE_SIZE_MB} MB limit"
+            size = await save_upload(file, upload_path, max_bytes, settings.MAX_FILE_SIZE_MB)
+            _check_is_image(upload_path, file.filename)
+
+            job = ImageJob(
+                id=job_id,
+                original_filename=file.filename or "upload",
+                original_path=str(upload_path),
+                status=JobStatus.PENDING,
+                output_format=format,
+                resize_width=width,
+                quality=quality,
+                original_size_bytes=size,
             )
-
-        job_id = str(uuid.uuid4())
-        ext = Path(file.filename or "image").suffix.lower() or ".jpg"
-        upload_path = settings.UPLOAD_DIR / f"{job_id}{ext}"
-
-        upload_path.write_bytes(content)
-
-        job = ImageJob(
-            id=job_id,
-            original_filename=file.filename or "upload",
-            original_path=str(upload_path),
-            status=JobStatus.PENDING,
-            output_format=format,
-            resize_width=width,
-            quality=quality,
-            original_size_bytes=size,
-        )
-        db.add(job)
-        db.flush()
-        jobs.append(job)
+            db.add(job)
+            db.flush()
+            jobs.append(job)
+    except Exception:
+        # A rejected file fails the whole request; don't leave earlier files behind
+        db.rollback()
+        delete_files(*written_paths)
+        raise
 
     db.commit()
 
@@ -120,38 +131,15 @@ def download_image(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(404, "Job not found")
 
-    if job.status == JobStatus.FAILED:
-        raise HTTPException(422, f"Processing failed: {job.error_message}")
-    if job.status == JobStatus.DOWNLOADED:
-        raise HTTPException(410, "File already downloaded and deleted")
-    if job.status == JobStatus.EXPIRED:
-        raise HTTPException(410, "File expired and deleted")
-    if job.status != JobStatus.READY:
-        raise HTTPException(425, f"Not ready yet — current status: {job.status}")
-
-    if not job.processed_path or not os.path.exists(job.processed_path):
-        raise HTTPException(404, "Processed file not found")
-
-    from datetime import datetime
-
-    processed_path = job.processed_path
-    original_path = job.original_path  # may already be None if deleted by worker
-
-    job.status = JobStatus.DOWNLOADED
-    job.downloaded_at = datetime.utcnow()
+    processed_path = downloadable_path(job, f"Not ready yet — current status: {job.status}")
     db.commit()
 
     ext = Path(processed_path).suffix
     filename = f"{Path(job.original_filename).stem}{ext}"
-
-    return FileResponse(
-        processed_path,
-        filename=filename,
-        background=BackgroundTask(_delete_files, processed_path, original_path),
-    )
+    return FileResponse(processed_path, filename=filename)
 
 
-@router.get("/jobs", response_model=JobListResponse)
+@router.get("/jobs", response_model=JobListResponse, dependencies=[Depends(require_admin)])
 def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),

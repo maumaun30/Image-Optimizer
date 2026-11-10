@@ -1,4 +1,3 @@
-import os
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -6,13 +5,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from starlette.background import BackgroundTask
 
 from app.config import settings
 from app.database import get_db
 from app.models import JobStatus, VideoCodec, VideoJob, VideoPreset
 from app.schemas import VideoJobListResponse, VideoJobResponse, VideoUploadResponse
 from app.services.video_processor import ffmpeg_bin, ffprobe_bin
+from app.uploads import check_capacity, delete_files, downloadable_path, require_admin, save_upload
 from app.workers.tasks import process_video_task
 
 router = APIRouter(prefix="/video", tags=["video"])
@@ -20,18 +19,6 @@ router = APIRouter(prefix="/video", tags=["video"])
 ALLOWED_EXTENSIONS = {
     ".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".mpg", ".mpeg", ".3gp", ".ts",
 }
-
-# Videos are streamed to disk in chunks — a 2 GB upload must never be held in memory
-CHUNK_SIZE = 4 * 1024 * 1024
-
-
-def _delete_files(*paths: str | None) -> None:
-    for path in paths:
-        if path:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
 
 
 @router.post("/upload", response_model=VideoUploadResponse, status_code=202)
@@ -55,6 +42,8 @@ async def upload_videos(
     if len(files) > settings.MAX_VIDEO_FILES:
         raise HTTPException(400, f"Maximum {settings.MAX_VIDEO_FILES} files per request")
 
+    check_capacity(db, VideoJob, settings.MAX_QUEUED_VIDEOS, len(files))
+
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     settings.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -73,22 +62,8 @@ async def upload_videos(
             upload_path = settings.UPLOAD_DIR / f"{job_id}{ext or '.mp4'}"
             written_paths.append(upload_path)
 
-            # Stream to disk; abort as soon as the limit is crossed rather than
-            # buffering the whole upload first.
-            size = 0
-            with upload_path.open("wb") as out:
-                while chunk := await file.read(CHUNK_SIZE):
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise HTTPException(
-                            413,
-                            f"File '{file.filename}' exceeds "
-                            f"{settings.MAX_VIDEO_SIZE_MB} MB limit",
-                        )
-                    out.write(chunk)
-
-            if size == 0:
-                raise HTTPException(400, f"File '{file.filename}' is empty")
+            # ffprobe in the worker is the real format check — a non-video fails there
+            size = await save_upload(file, upload_path, max_bytes, settings.MAX_VIDEO_SIZE_MB)
 
             job = VideoJob(
                 id=job_id,
@@ -107,7 +82,7 @@ async def upload_videos(
     except Exception:
         # Don't leave gigabytes of orphaned upload behind on a rejected request
         db.rollback()
-        _delete_files(*[str(p) for p in written_paths])
+        delete_files(*written_paths)
         raise
 
     db.commit()
@@ -137,40 +112,17 @@ def download_video(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(404, "Job not found")
 
-    if job.status == JobStatus.FAILED:
-        raise HTTPException(422, f"Processing failed: {job.error_message}")
-    if job.status == JobStatus.DOWNLOADED:
-        raise HTTPException(410, "File already downloaded and deleted")
-    if job.status == JobStatus.EXPIRED:
-        raise HTTPException(410, "File expired and deleted")
-    if job.status != JobStatus.READY:
-        raise HTTPException(
-            425, f"Not ready yet — current status: {job.status} ({job.progress_percent}%)"
-        )
-
-    if not job.processed_path or not os.path.exists(job.processed_path):
-        raise HTTPException(404, "Processed file not found")
-
-    from datetime import datetime
-
-    processed_path = job.processed_path
-    original_path = job.original_path  # may already be None if deleted by worker
-
-    job.status = JobStatus.DOWNLOADED
-    job.downloaded_at = datetime.utcnow()
+    processed_path = downloadable_path(
+        job, f"Not ready yet — current status: {job.status} ({job.progress_percent}%)"
+    )
     db.commit()
 
     ext = Path(processed_path).suffix
     filename = f"{Path(job.original_filename).stem}{ext}"
-
-    return FileResponse(
-        processed_path,
-        filename=filename,
-        background=BackgroundTask(_delete_files, processed_path, original_path),
-    )
+    return FileResponse(processed_path, filename=filename)
 
 
-@router.get("/jobs", response_model=VideoJobListResponse)
+@router.get("/jobs", response_model=VideoJobListResponse, dependencies=[Depends(require_admin)])
 def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),

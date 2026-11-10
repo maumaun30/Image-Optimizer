@@ -1,6 +1,9 @@
 import os
 from datetime import datetime, timedelta
 
+import pikepdf
+from PIL import Image, UnidentifiedImageError
+
 from app.config import settings
 from app.database import SessionLocal
 from app.models import ImageJob, JobStatus, PdfJob, VideoJob
@@ -8,6 +11,20 @@ from app.services.image_processor import process_image
 from app.services.pdf_processor import process_pdf
 from app.services.video_processor import FfmpegMissingError, VideoProcessingError, process_video
 from app.workers.celery_app import celery_app
+
+# Errors caused by the input file itself. Retrying can't fix them, so the job fails at
+# once instead of burning three retries on a corrupt upload.
+PERMANENT_IMAGE_ERRORS = (UnidentifiedImageError, Image.DecompressionBombError, ValueError)
+PERMANENT_PDF_ERRORS = (pikepdf.PdfError,)
+
+
+def _fail(db, model, job_id: str, exc: Exception) -> None:
+    db.rollback()
+    job = db.get(model, job_id)
+    if job:
+        job.status = JobStatus.FAILED
+        job.error_message = str(exc)
+        db.commit()
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=10)
@@ -42,6 +59,10 @@ def process_image_task(self, job_id: str):
             os.remove(job.original_path)
         job.original_path = None
         db.commit()
+
+    except PERMANENT_IMAGE_ERRORS as exc:
+        _fail(db, ImageJob, job_id, exc)
+        return
 
     except Exception as exc:
         db.rollback()
@@ -89,6 +110,10 @@ def process_pdf_task(self, job_id: str):
             os.remove(job.original_path)
         job.original_path = None
         db.commit()
+
+    except PERMANENT_PDF_ERRORS as exc:
+        _fail(db, PdfJob, job_id, exc)
+        return
 
     except Exception as exc:
         db.rollback()
@@ -207,6 +232,29 @@ def cleanup_expired_jobs():
                         except OSError:
                             pass
                 job.status = JobStatus.EXPIRED
+                job.original_path = None
+                job.processed_path = None
+                count += 1
+
+            # Downloaded files are kept for a short grace window (dropped connections,
+            # browser retries) and deleted here once it has passed.
+            grace_cutoff = datetime.utcnow() - timedelta(minutes=settings.DOWNLOAD_GRACE_MINUTES)
+            downloaded = (
+                db.query(model)
+                .filter(
+                    model.status == JobStatus.DOWNLOADED,
+                    model.processed_path.isnot(None),
+                    model.downloaded_at < grace_cutoff,
+                )
+                .all()
+            )
+            for job in downloaded:
+                for path in (job.original_path, job.processed_path):
+                    if path:
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
                 job.original_path = None
                 job.processed_path = None
                 count += 1
