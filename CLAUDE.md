@@ -67,7 +67,12 @@ docker compose up --build
 | GET | `/pdf/status/{id}` | Poll PDF job status |
 | GET | `/pdf/download/{id}` | Download compressed PDF (same grace window as images) |
 | GET | `/pdf/jobs` | List your PDF jobs (same query params as images) |
-| POST | `/video/upload` | Upload 1-5 videos; query params: `preset` (low/balanced/high), `codec` (h264/vp9/av1), `width` (int), `mute` (bool) |
+| POST | `/video/upload` | Legacy single-request upload of 1-5 videos (use tus below); query params: `preset` (low/balanced/high), `codec` (h264/vp9/av1), `width` (int), `mute` (bool) |
+| POST | `/video/tus/` | Start a resumable upload (tus 1.0 `creation`): `Upload-Length` + `Upload-Metadata` `filename`, `filetype`, `preset`, `codec`, `width`, `mute` |
+| HEAD | `/video/tus/{id}` | Resume point (`Upload-Offset`) |
+| PATCH | `/video/tus/{id}` | Append one chunk (≤ `TUS_MAX_CHUNK_MB`) at `Upload-Offset`; the last one queues the encode |
+| DELETE | `/video/tus/{id}` | Cancel an unfinished upload |
+| GET | `/video/tus/{id}` | Not tus: `{offset, length, job}` — the VideoJob a finished upload became |
 | GET | `/video/status/{id}` | Poll video job status (includes `progress_percent`) |
 | GET | `/video/download/{id}` | Download compressed video (same grace window as images) |
 | GET | `/video/jobs` | List your video jobs (same query params as images) |
@@ -97,6 +102,9 @@ Every endpoint except `/health` and `/auth/*` needs a signed-in Google Workspace
 `POST /pdf/upload` queues `process_pdf_task`, which compresses via **Ghostscript** when the `gs` binary is on PATH (downsamples embedded images per preset — `screen`/`ebook`/`printer`), and otherwise falls back to **pikepdf** lossless structural compression. The `lossless` level always uses pikepdf. PDF jobs live in the `pdf_jobs` table and share the same status flow, auto-delete, and hourly cleanup as image jobs. The Docker image installs `ghostscript`; on bare-metal, `apt-get install ghostscript` enables the better compression path.
 
 ### Video compression
+
+**Uploads are resumable (tus).** `app/routers/tus.py` implements tus 1.0 core + `creation` + `termination`; the frontend uses tus-js-client. Chunks are capped at `TUS_MAX_CHUNK_MB` (40) so each request fits under Cloudflare's 100 MB body limit — videos go through the normal proxied API host, and a dropped connection or page reload resumes from the last byte the server has (`tus_uploads.offset`). A finished upload becomes a `VideoJob`; unfinished ones untouched for `TUS_EXPIRE_HOURS` are purged by the cleanup task, and a user may have at most `TUS_MAX_OPEN_PER_USER` open at once. Creation reserves the whole file's disk space (507 when it won't fit).
+
 
 `POST /video/upload` queues `process_video_task`, which compresses via **ffmpeg**. Unlike PDFs there is **no fallback encoder** — without `ffmpeg` and `ffprobe` on PATH the endpoint returns 503. The Docker image installs `ffmpeg`; on Ubuntu bare-metal, `apt-get install ffmpeg`; on macOS, `brew install ffmpeg`.
 

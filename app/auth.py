@@ -152,14 +152,39 @@ def current_user(request: Request) -> User:
 
     _check_origin(request)
 
-    session = _unsign(request.cookies.get(SESSION_COOKIE))
-    # Re-check the domain on every request so removing it from ALLOWED_DOMAINS takes
-    # effect immediately, not when the session expires.
-    if not session or session.get("hd") not in settings.ALLOWED_DOMAINS:
-        raise HTTPException(401, "Sign in required")
+    for value in _session_cookie_values(request):
+        session = _unsign(value)
+        # Re-check the domain on every request so removing it from ALLOWED_DOMAINS
+        # takes effect immediately, not when the session expires.
+        if session and session.get("hd") in settings.ALLOWED_DOMAINS:
+            email = session["email"]
+            return User(email, session.get("name", email), email.lower() in settings.ADMIN_EMAILS)
+    raise HTTPException(401, "Sign in required")
 
-    email = session["email"]
-    return User(email, session.get("name", email), email.lower() in settings.ADMIN_EMAILS)
+
+def _session_cookie_values(request: Request) -> list[str]:
+    """Every session cookie the browser sent, not just one.
+
+    A browser can hold two cookies with the same name for different domains — e.g.
+    after moving SESSION_COOKIE_DOMAIN, an old `.example.com` one alongside the new
+    `.app.example.com` one, and it sends both. `request.cookies` keeps only one of
+    them, which may be the stale one; trying each means any valid session works.
+    """
+    values = []
+    for part in request.headers.get("cookie", "").split(";"):
+        name, sep, value = part.strip().partition("=")
+        if sep and name == SESSION_COOKIE and value:
+            values.append(value.strip('"'))
+    return values
+
+
+def _needs_auth_before_body(scope) -> bool:
+    """Requests that carry an upload body: classic multipart uploads and the
+    resumable (tus) create/append calls."""
+    method, path = scope["method"], scope["path"]
+    if method == "POST" and path.endswith("/upload"):
+        return True
+    return method in ("POST", "PATCH") and path.startswith("/video/tus")
 
 
 class UploadAuthMiddleware:
@@ -176,11 +201,7 @@ class UploadAuthMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if (
-            scope["type"] == "http"
-            and scope["method"] == "POST"
-            and scope["path"].endswith("/upload")
-        ):
+        if scope["type"] == "http" and _needs_auth_before_body(scope):
             try:
                 current_user(Request(scope))
             except HTTPException as exc:
