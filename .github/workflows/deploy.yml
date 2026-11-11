@@ -18,7 +18,9 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           script: |
             set -e
-            cd /var/www/image-optimizer
+            # The systemd units run from the Cloud Panel site root; set the DEPLOY_PATH
+            # secret to that directory if it differs from this default.
+            cd "${{ secrets.DEPLOY_PATH || '/var/www/image-optimizer' }}"
 
             # Pull latest code
             git pull origin main
@@ -31,9 +33,13 @@ jobs:
             alembic upgrade head
 
             # Reload services (zero-downtime for API)
-            sudo systemctl restart imageopt-worker imageopt-beat
+            # The video worker finishes its current encode before stopping (Celery warm
+            # shutdown); one cut off by systemd's stop timeout is redelivered and re-run.
+            sudo systemctl restart imageopt-worker imageopt-video-worker imageopt-beat
             sudo systemctl reload-or-restart imageopt-api
 
-            # Confirm API is running
-            sudo systemctl is-active --quiet imageopt-api && echo "API: OK"
-            sudo systemctl is-active --quiet imageopt-worker && echo "Worker: OK"
+            # Fail the deploy if any service didn't come back up
+            for svc in imageopt-api imageopt-worker imageopt-video-worker imageopt-beat; do
+              sudo systemctl is-active --quiet "$svc" || { echo "$svc: NOT RUNNING"; exit 1; }
+              echo "$svc: OK"
+            done

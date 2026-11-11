@@ -28,7 +28,8 @@ celery_app.conf.update(
     beat_schedule={
         "cleanup-expired-jobs": {
             "task": "app.workers.tasks.cleanup_expired_jobs",
-            "schedule": crontab(minute=0),  # top of every hour
+            # Every 10 min, so downloaded files don't outlive DOWNLOAD_GRACE_MINUTES by much
+            "schedule": crontab(minute="*/10"),
         }
     },
 )

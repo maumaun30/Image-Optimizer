@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -43,6 +44,40 @@ class Settings(BaseSettings):
     VIDEO_TIME_LIMIT_SECONDS: int = 7200
     # Cap ffmpeg CPU use so one encode can't starve the box
     FFMPEG_THREADS: int = 2
+
+    # Downloads stay available this long after the first one (dropped connections,
+    # browser retries), then the cleanup task deletes the file
+    DOWNLOAD_GRACE_MINUTES: int = 30
+
+    # Abuse backstops — uploads get 503 past these (per-IP limits live in nginx)
+    MAX_QUEUED_JOBS: int = 200
+    MAX_QUEUED_VIDEOS: int = 20
+    MIN_FREE_DISK_MB: int = 5120
+
+    # Google sign-in (see app/auth.py). The API refuses to start with these unset.
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    # Must exactly match a redirect URI on the Google OAuth client
+    AUTH_REDIRECT_URL: str = ""  # e.g. https://api.example.com/auth/callback
+    FRONTEND_URL: str = ""  # e.g. https://app.example.com
+    # 32+ random characters; rotating it signs everyone out
+    SESSION_SECRET: str = ""
+    # Parent domain shared by frontend and API, e.g. .example.com. Empty = API host only
+    # (fine for localhost dev).
+    SESSION_COOKIE_DOMAIN: str = ""
+    SESSION_MAX_AGE_HOURS: int = 12
+    # Google Workspace domains allowed to sign in (matched on the ID token's `hd` claim)
+    ALLOWED_DOMAINS: list[str] = []
+    # These accounts see every user's jobs in the /*/jobs listings
+    ADMIN_EMAILS: list[str] = []
+    # Local dev only, and only honoured with DEBUG=true: skip sign-in entirely
+    AUTH_DISABLED: bool = False
+    DEV_USER_EMAIL: str = "dev@localhost"
+
+    @field_validator("ALLOWED_DOMAINS", "ADMIN_EMAILS")
+    @classmethod
+    def _lowercase(cls, values: list[str]) -> list[str]:
+        return [v.strip().lower() for v in values if v.strip()]
 
     # CORS — comma-separated origins, e.g. https://your-app.vercel.app
     CORS_ORIGINS: list[str] = ["*"]

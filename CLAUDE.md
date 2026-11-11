@@ -17,8 +17,8 @@ FastAPI service that accepts image uploads, queues optimization jobs via Celery,
 1. `POST /images/upload` — saves files to `uploads/`, creates `ImageJob` rows, dispatches Celery tasks
 2. Celery worker resizes + converts → saves to `processed/`, deletes original upload, marks job `READY`
 3. `GET /images/status/{id}` — poll until `READY`
-4. `GET /images/download/{id}` — streams file, deletes processed file after response, marks job `DOWNLOADED`
-5. Celery Beat runs hourly `cleanup_expired_jobs` to purge stale files older than `AUTO_DELETE_HOURS`
+4. `GET /images/download/{id}` — streams file, marks job `DOWNLOADED`; the file stays re-downloadable for `DOWNLOAD_GRACE_MINUTES` (dropped connections, browser retries)
+5. Celery Beat runs `cleanup_expired_jobs` every 10 min: deletes downloaded files past the grace window, and purges stale files older than `AUTO_DELETE_HOURS`
 
 ## Local dev
 
@@ -61,17 +61,36 @@ docker compose up --build
 |---|---|---|
 | POST | `/images/upload` | Upload 1-20 images; query params: `format` (webp/avif/original), `width` (int), `quality` (50-100, default 85; 100 = lossless) |
 | GET | `/images/status/{id}` | Poll job status |
-| GET | `/images/download/{id}` | Download processed image (one-time, auto-deletes) |
-| GET | `/images/jobs` | List all jobs (query: `limit`, `offset`) |
+| GET | `/images/download/{id}` | Download processed image (re-downloadable for `DOWNLOAD_GRACE_MINUTES`, then deleted) |
+| GET | `/images/jobs` | List your jobs (query: `limit`, `offset`; admins add `all=true` for everyone's) |
 | POST | `/pdf/upload` | Upload 1-20 PDFs; query param: `level` (screen/ebook/printer/lossless) |
 | GET | `/pdf/status/{id}` | Poll PDF job status |
-| GET | `/pdf/download/{id}` | Download compressed PDF (one-time, auto-deletes) |
-| GET | `/pdf/jobs` | List all PDF jobs (query: `limit`, `offset`) |
+| GET | `/pdf/download/{id}` | Download compressed PDF (same grace window as images) |
+| GET | `/pdf/jobs` | List your PDF jobs (same query params as images) |
 | POST | `/video/upload` | Upload 1-5 videos; query params: `preset` (low/balanced/high), `codec` (h264/vp9/av1), `width` (int), `mute` (bool) |
 | GET | `/video/status/{id}` | Poll video job status (includes `progress_percent`) |
-| GET | `/video/download/{id}` | Download compressed video (one-time, auto-deletes) |
-| GET | `/video/jobs` | List all video jobs (query: `limit`, `offset`) |
-| GET | `/health` | Health check |
+| GET | `/video/download/{id}` | Download compressed video (same grace window as images) |
+| GET | `/video/jobs` | List your video jobs (same query params as images) |
+| GET | `/auth/login` | Start Google sign-in; `next` = frontend path to return to |
+| GET | `/auth/callback` | Google redirect target; sets the session cookie |
+| GET | `/auth/me` | Signed-in user (`email`, `name`, `is_admin`) or 401 |
+| POST | `/auth/logout` | Clear the session cookie |
+| GET | `/health` | Health check (public) |
+
+### Authentication
+
+Every endpoint except `/health` and `/auth/*` needs a signed-in Google Workspace account whose `hd` (hosted domain) claim is in `ALLOWED_DOMAINS`; personal Gmail accounts have no `hd` and are always refused. `app/auth.py` runs the OAuth code flow itself and keeps the session in a signed httpOnly cookie on `SESSION_COOKIE_DOMAIN`, so the frontend, API and upload hosts must share that parent domain. No extra packages: HMAC-SHA256 signs cookies, and the ID token comes straight from Google's token endpoint over TLS.
+
+- Jobs record `owner_email`. Status, download and listings only show your own jobs (404 otherwise); `ADMIN_EMAILS` can list everyone's with `?all=true`. Jobs from before migration 005 have no owner and are visible to admins only.
+- `UploadAuthMiddleware` rejects anonymous `POST */upload` before the body is read (FastAPI parses multipart bodies before dependencies run); nginx streams upload bodies for the same reason.
+- POSTs with an `Origin` outside `CORS_ORIGINS` get 403 — SameSite=Lax alone lets sibling subdomains through.
+- The API refuses to start with auth settings missing or `CORS_ORIGINS=["*"]`. For local dev without Google, set `DEBUG=true` and `AUTH_DISABLED=true` (everything runs as an admin dev user).
+
+### Abuse limits
+
+- **Per-IP upload rate limits** live in nginx (`limit_req` zones in `nginx/imageopt-http.conf`, shared by both hosts; CORS preflights aren't counted). The API host sits behind Cloudflare, so its snippet includes `cloudflare-realip.conf` — without it every visitor shares the few Cloudflare edge IPs.
+- **Capacity backstop** in the app: uploads get 503 when `MAX_QUEUED_JOBS` / `MAX_QUEUED_VIDEOS` jobs are pending or processing, or free disk falls below `MIN_FREE_DISK_MB`.
+- **Uploads stream to disk** for every type and are sniffed from their bytes (Pillow for images, `%PDF-` header for PDFs; ffprobe in the worker for video). Corrupt inputs fail without retries.
 
 ### PDF compression
 
@@ -102,9 +121,11 @@ pip install -r requirements.txt
 cp .env.example .env          # fill in production values
 alembic upgrade head
 
-# Copy nginx config
-cp nginx/nginx.conf /etc/nginx/sites-available/imageopt
-ln -s /etc/nginx/sites-available/imageopt /etc/nginx/sites-enabled/
+# nginx — see "Nginx (Cloud Panel)" below
+mkdir -p /etc/nginx/snippets
+cp nginx/imageopt-http.conf /etc/nginx/sites-enabled/00-imageopt-shared.conf
+cp nginx/cloudflare-realip.conf nginx/imageopt-api.locations.conf \
+   nginx/imageopt-upload.locations.conf /etc/nginx/snippets/
 nginx -t && systemctl reload nginx
 
 # Install systemd services
@@ -113,6 +134,20 @@ systemctl daemon-reload
 systemctl enable imageopt-api imageopt-worker imageopt-video-worker imageopt-beat
 systemctl start imageopt-api imageopt-worker imageopt-video-worker imageopt-beat
 ```
+
+## Nginx (Cloud Panel)
+
+Two Cloud Panel sites front the same API process; Cloud Panel owns each site's `listen`, `server_name` and SSL lines, so the repo ships include files rather than whole vhosts:
+
+| Host | Cloudflare | Serves | Include in its vhost |
+|---|---|---|---|
+| `image-optimizer.quailshack.com` | proxied (orange) | the whole API | `include /etc/nginx/snippets/imageopt-api.locations.conf;` |
+| `upload.quailshack.com` | DNS only (grey) | `POST /video/upload` only — bypasses Cloudflare's 100 MB body cap | `include /etc/nginx/snippets/imageopt-upload.locations.conf;` |
+
+- `nginx/imageopt-http.conf` → `/etc/nginx/sites-enabled/00-imageopt-shared.conf`: the `imageopt_api` upstream and the rate-limit zones. http-level, so it must exist exactly once; Cloud Panel's `nginx.conf` includes only `sites-enabled/*.conf` (no `conf.d`). `/etc/nginx/snippets/` doesn't exist on Cloud Panel — create it.
+- In each site's vhost (Cloud Panel → Sites → site → Vhost), replace the site's own `location / { … }` proxy block with the include line above. Keep everything Cloud Panel generated for listen/SSL.
+- `upstream imageopt_api` must point at the API's `APP_PORT`.
+- The deploy workflow does not touch nginx; re-copy the files after changing them.
 
 ## GitHub Actions secrets required
 
