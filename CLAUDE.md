@@ -88,7 +88,7 @@ Every endpoint except `/health` and `/auth/*` needs a signed-in Google Workspace
 
 ### Abuse limits
 
-- **Per-IP upload rate limits** live in nginx (`limit_req` zones in `nginx/nginx.conf`). Behind Cloudflare they need `nginx/cloudflare-realip.conf` copied to `/etc/nginx/snippets/`, or every visitor shares the few Cloudflare edge IPs.
+- **Per-IP upload rate limits** live in nginx (`limit_req` zones in `nginx/imageopt-http.conf`, shared by both hosts; CORS preflights aren't counted). The API host sits behind Cloudflare, so its snippet includes `cloudflare-realip.conf` — without it every visitor shares the few Cloudflare edge IPs.
 - **Capacity backstop** in the app: uploads get 503 when `MAX_QUEUED_JOBS` / `MAX_QUEUED_VIDEOS` jobs are pending or processing, or free disk falls below `MIN_FREE_DISK_MB`.
 - **Uploads stream to disk** for every type and are sniffed from their bytes (Pillow for images, `%PDF-` header for PDFs; ffprobe in the worker for video). Corrupt inputs fail without retries.
 
@@ -121,10 +121,10 @@ pip install -r requirements.txt
 cp .env.example .env          # fill in production values
 alembic upgrade head
 
-# Copy nginx config
-cp nginx/nginx.conf /etc/nginx/sites-available/imageopt
-cp nginx/cloudflare-realip.conf /etc/nginx/snippets/   # required: nginx.conf includes it
-ln -s /etc/nginx/sites-available/imageopt /etc/nginx/sites-enabled/
+# nginx — see "Nginx (Cloud Panel)" below
+cp nginx/imageopt-http.conf /etc/nginx/conf.d/imageopt.conf
+cp nginx/cloudflare-realip.conf nginx/imageopt-api.locations.conf \
+   nginx/imageopt-upload.locations.conf /etc/nginx/snippets/
 nginx -t && systemctl reload nginx
 
 # Install systemd services
@@ -133,6 +133,20 @@ systemctl daemon-reload
 systemctl enable imageopt-api imageopt-worker imageopt-video-worker imageopt-beat
 systemctl start imageopt-api imageopt-worker imageopt-video-worker imageopt-beat
 ```
+
+## Nginx (Cloud Panel)
+
+Two Cloud Panel sites front the same API process; Cloud Panel owns each site's `listen`, `server_name` and SSL lines, so the repo ships include files rather than whole vhosts:
+
+| Host | Cloudflare | Serves | Include in its vhost |
+|---|---|---|---|
+| `image-optimizer.quailshack.com` | proxied (orange) | the whole API | `include /etc/nginx/snippets/imageopt-api.locations.conf;` |
+| `upload.quailshack.com` | DNS only (grey) | `POST /video/upload` only — bypasses Cloudflare's 100 MB body cap | `include /etc/nginx/snippets/imageopt-upload.locations.conf;` |
+
+- `nginx/imageopt-http.conf` → `/etc/nginx/conf.d/imageopt.conf`: the `imageopt_api` upstream and the rate-limit zones. http-level, so it must exist exactly once.
+- In each site's vhost (Cloud Panel → Sites → site → Vhost), replace the site's own `location / { … }` proxy block with the include line above. Keep everything Cloud Panel generated for listen/SSL.
+- `upstream imageopt_api` must point at the API's `APP_PORT`.
+- The deploy workflow does not touch nginx; re-copy the files after changing them.
 
 ## GitHub Actions secrets required
 
