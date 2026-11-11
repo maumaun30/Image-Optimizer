@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     # Cap ffmpeg CPU use so one encode can't starve the box
     FFMPEG_THREADS: int = 2
 
+    # Resumable (tus) video uploads. Each PATCH carries one chunk; keep this under
+    # Cloudflare's 100 MB request cap and in step with nginx's /video/tus body limit.
+    TUS_MAX_CHUNK_MB: int = 40
+    # Unfinished uploads a user may have open at once (each reserves disk space)
+    TUS_MAX_OPEN_PER_USER: int = 5
+    # Unfinished uploads untouched this long are deleted
+    TUS_EXPIRE_HOURS: int = 24
+
     # Downloads stay available this long after the first one (dropped connections,
     # browser retries), then the cleanup task deletes the file
     DOWNLOAD_GRACE_MINUTES: int = 30

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import auth
 from app.config import settings
-from app.routers import images, pdf, video
+from app.routers import images, pdf, tus, video
 
 
 logger = logging.getLogger(__name__)
@@ -40,12 +40,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # tus-js-client reads these on cross-origin responses to resume uploads
+    expose_headers=tus.EXPOSE_HEADERS,
 )
 
 app.include_router(auth.router)
 app.include_router(images.router)
 app.include_router(pdf.router)
 app.include_router(video.router)
+app.include_router(tus.router)
 
 
 @app.get("/health", tags=["health"])

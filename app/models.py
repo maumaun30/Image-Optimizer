@@ -148,3 +148,29 @@ class PdfJob(Base):
     created_at = Column(DateTime, server_default=func.now())
     processed_at = Column(DateTime)
     downloaded_at = Column(DateTime)
+
+
+class TusUpload(Base):
+    """A resumable (tus) video upload in progress.
+
+    The file grows at `path` one chunk at a time; `offset` is how many bytes are on
+    disk. When it reaches `length` the upload turns into a VideoJob (`job_id`) and
+    the encode is queued. Incomplete uploads are purged by `cleanup_expired_jobs`.
+    """
+
+    __tablename__ = "tus_uploads"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_email = Column(String(255), nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    path = Column(String(500), nullable=False)
+    length = Column(BigInteger, nullable=False)
+    offset = Column(BigInteger, nullable=False, default=0, server_default="0")
+    # Encode options, chosen when the upload starts
+    preset = Column(String(16), nullable=False)
+    codec = Column(String(16), nullable=False)
+    target_width = Column(Integer)
+    mute = Column(Boolean, nullable=False, default=False, server_default="0")
+    job_id = Column(String(36))
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

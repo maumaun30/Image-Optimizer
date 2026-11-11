@@ -6,7 +6,7 @@ from PIL import Image, UnidentifiedImageError
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import ImageJob, JobStatus, PdfJob, VideoJob
+from app.models import ImageJob, JobStatus, PdfJob, TusUpload, VideoJob
 from app.services.image_processor import process_image
 from app.services.pdf_processor import process_pdf
 from app.services.video_processor import FfmpegMissingError, VideoProcessingError, process_video
@@ -258,6 +258,25 @@ def cleanup_expired_jobs():
                 job.original_path = None
                 job.processed_path = None
                 count += 1
+
+        # Resumable uploads: drop unfinished ones nobody has touched in a while (their
+        # partial files reserve disk), and the bookkeeping rows of finished ones once
+        # their job has expired anyway.
+        stale_cutoff = datetime.utcnow() - timedelta(hours=settings.TUS_EXPIRE_HOURS)
+        for upload in (
+            db.query(TusUpload)
+            .filter(TusUpload.job_id.is_(None), TusUpload.updated_at < stale_cutoff)
+            .all()
+        ):
+            try:
+                os.remove(upload.path)
+            except OSError:
+                pass
+            db.delete(upload)
+            count += 1
+        db.query(TusUpload).filter(
+            TusUpload.job_id.isnot(None), TusUpload.created_at < cutoff
+        ).delete(synchronize_session=False)
 
         db.commit()
         return f"Cleaned up {count} expired jobs"
