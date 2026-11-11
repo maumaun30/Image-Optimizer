@@ -131,9 +131,11 @@ def test_open_upload_limit(monkeypatch, client):
 
 
 def test_disk_is_reserved_for_the_whole_file(monkeypatch, client):
-    monkeypatch.setattr(settings, "MIN_FREE_DISK_MB", 1)
-    free = __import__("shutil").disk_usage(settings.UPLOAD_DIR).free
-    assert create(client, free).status_code == 507
+    # Floor = exactly what's free now: the capacity check (free ≥ floor) still passes,
+    # but reserving the file on top would dip below it
+    free_mb = __import__("shutil").disk_usage(settings.UPLOAD_DIR).free // (1024 * 1024)
+    monkeypatch.setattr(settings, "MIN_FREE_DISK_MB", free_mb)
+    assert create(client, 50 * 1024 * 1024).status_code == 507
 
 
 def test_cancel_deletes_the_partial_file(client, db):
