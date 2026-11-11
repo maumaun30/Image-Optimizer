@@ -122,7 +122,8 @@ cp .env.example .env          # fill in production values
 alembic upgrade head
 
 # nginx — see "Nginx (Cloud Panel)" below
-cp nginx/imageopt-http.conf /etc/nginx/conf.d/imageopt.conf
+mkdir -p /etc/nginx/snippets
+cp nginx/imageopt-http.conf /etc/nginx/sites-enabled/00-imageopt-shared.conf
 cp nginx/cloudflare-realip.conf nginx/imageopt-api.locations.conf \
    nginx/imageopt-upload.locations.conf /etc/nginx/snippets/
 nginx -t && systemctl reload nginx
@@ -143,7 +144,7 @@ Two Cloud Panel sites front the same API process; Cloud Panel owns each site's `
 | `image-optimizer.quailshack.com` | proxied (orange) | the whole API | `include /etc/nginx/snippets/imageopt-api.locations.conf;` |
 | `upload.quailshack.com` | DNS only (grey) | `POST /video/upload` only — bypasses Cloudflare's 100 MB body cap | `include /etc/nginx/snippets/imageopt-upload.locations.conf;` |
 
-- `nginx/imageopt-http.conf` → `/etc/nginx/conf.d/imageopt.conf`: the `imageopt_api` upstream and the rate-limit zones. http-level, so it must exist exactly once.
+- `nginx/imageopt-http.conf` → `/etc/nginx/sites-enabled/00-imageopt-shared.conf`: the `imageopt_api` upstream and the rate-limit zones. http-level, so it must exist exactly once; Cloud Panel's `nginx.conf` includes only `sites-enabled/*.conf` (no `conf.d`). `/etc/nginx/snippets/` doesn't exist on Cloud Panel — create it.
 - In each site's vhost (Cloud Panel → Sites → site → Vhost), replace the site's own `location / { … }` proxy block with the include line above. Keep everything Cloud Panel generated for listen/SSL.
 - `upstream imageopt_api` must point at the API's `APP_PORT`.
 - The deploy workflow does not touch nginx; re-copy the files after changing them.
