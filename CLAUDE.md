@@ -149,14 +149,25 @@ Two Cloud Panel sites front the same API process; Cloud Panel owns each site's `
 - `upstream imageopt_api` must point at the API's `APP_PORT`.
 - The deploy workflow does not touch nginx; re-copy the files after changing them.
 
+## Deploy user
+
+`SSH_USER` is the Cloud Panel site user `quailshack-image-optimizer` (it owns the code, so `git pull`, `pip` and `alembic` need no sudo). It may run exactly the two restart commands the workflow uses, nothing else — `/etc/sudoers.d/imageopt-deploy`:
+
+```
+quailshack-image-optimizer ALL=(root) NOPASSWD: /usr/bin/systemctl restart imageopt-worker imageopt-video-worker imageopt-beat, /usr/bin/systemctl reload-or-restart imageopt-api
+```
+
+Sudoers matches arguments exactly, so changing those lines in `deploy.yml` means changing this file too. No wildcards: `imageopt-*` would also match extra unit names appended after it.
+
 ## GitHub Actions secrets required
 
 | Secret | Value |
 |---|---|
 | `SSH_HOST` | Server IP or hostname |
-| `SSH_USER` | SSH username (e.g. `www-data` or `deploy`) |
+| `SSH_USER` | `quailshack-image-optimizer` (see Deploy user) |
 | `SSH_PRIVATE_KEY` | Private key contents (the deploy key) |
 | `SSH_PORT` | SSH port (default 22) |
+| `DEPLOY_PATH` | `/home/quailshack-image-optimizer/htdocs/image-optimizer.quailshack.com` |
 
 ## AVIF support
 

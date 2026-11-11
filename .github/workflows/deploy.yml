@@ -3,9 +3,16 @@ name: Deploy
 on:
   push:
     branches: [main]
+  # "Run workflow" button in the Actions tab: redeploy without pushing code
+  workflow_dispatch:
 
 jobs:
+  # Never ship a commit whose tests fail
+  test:
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
@@ -33,13 +40,15 @@ jobs:
             alembic upgrade head
 
             # Reload services (zero-downtime for API)
-            # The video worker finishes its current encode before stopping (Celery warm
+            # Needs passwordless sudo for exactly these two commands (see CLAUDE.md,
+            # "Deploy user"). The video worker finishes its current encode before stopping (Celery warm
             # shutdown); one cut off by systemd's stop timeout is redelivered and re-run.
-            sudo systemctl restart imageopt-worker imageopt-video-worker imageopt-beat
-            sudo systemctl reload-or-restart imageopt-api
+            sudo -n systemctl restart imageopt-worker imageopt-video-worker imageopt-beat
+            sudo -n systemctl reload-or-restart imageopt-api
 
             # Fail the deploy if any service didn't come back up
             for svc in imageopt-api imageopt-worker imageopt-video-worker imageopt-beat; do
-              sudo systemctl is-active --quiet "$svc" || { echo "$svc: NOT RUNNING"; exit 1; }
+              # No sudo: any user may query unit state
+              systemctl is-active --quiet "$svc" || { echo "$svc: NOT RUNNING"; exit 1; }
               echo "$svc: OK"
             done
