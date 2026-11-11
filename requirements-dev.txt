@@ -1,0 +1,5 @@
+# Test-only dependencies (CI and local): pip install -r requirements-dev.txt
+-r requirements.txt
+pytest==9.2.0
+# Starlette 1.x TestClient is built on httpx2
+httpx2==2.16.0
