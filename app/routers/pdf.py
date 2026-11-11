@@ -10,7 +10,15 @@ from app.config import settings
 from app.database import get_db
 from app.models import CompressionLevel, JobStatus, PdfJob
 from app.schemas import PdfJobListResponse, PdfJobResponse, PdfUploadResponse
-from app.uploads import check_capacity, delete_files, downloadable_path, require_admin, save_upload
+from app.auth import User, current_user
+from app.uploads import (
+    check_capacity,
+    delete_files,
+    downloadable_path,
+    get_owned_job,
+    save_upload,
+    visible_jobs,
+)
 from app.workers.tasks import process_pdf_task
 
 router = APIRouter(prefix="/pdf", tags=["pdf"])
@@ -33,6 +41,7 @@ async def upload_pdfs(
         CompressionLevel.EBOOK, description="Compression preset"
     ),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     if not files:
         raise HTTPException(400, "No files provided")
@@ -65,6 +74,7 @@ async def upload_pdfs(
 
             job = PdfJob(
                 id=job_id,
+                owner_email=user.email,
                 original_filename=file.filename or "upload.pdf",
                 original_path=str(upload_path),
                 status=JobStatus.PENDING,
@@ -94,18 +104,18 @@ async def upload_pdfs(
 
 
 @router.get("/status/{job_id}", response_model=PdfJobResponse)
-def get_status(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(PdfJob, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+def get_status(
+    job_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)
+):
+    job = get_owned_job(db, PdfJob, job_id, user)
     return PdfJobResponse.model_validate(job)
 
 
 @router.get("/download/{job_id}")
-def download_pdf(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(PdfJob, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+def download_pdf(
+    job_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)
+):
+    job = get_owned_job(db, PdfJob, job_id, user)
 
     processed_path = downloadable_path(job, f"Not ready yet — current status: {job.status}")
     db.commit()
@@ -114,15 +124,19 @@ def download_pdf(job_id: str, db: Session = Depends(get_db)):
     return FileResponse(processed_path, filename=filename, media_type="application/pdf")
 
 
-@router.get("/jobs", response_model=PdfJobListResponse, dependencies=[Depends(require_admin)])
+@router.get("/jobs", response_model=PdfJobListResponse)
 def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    all_users: bool = Query(False, alias="all", description="Admins only: list every user's jobs"),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
-    total = db.query(PdfJob).count()
+    """The signed-in user's jobs, newest first."""
+    query = visible_jobs(db, PdfJob, user, all_users)
+    total = query.count()
     jobs = (
-        db.query(PdfJob)
+        query
         .order_by(PdfJob.created_at.desc())
         .offset(offset)
         .limit(limit)

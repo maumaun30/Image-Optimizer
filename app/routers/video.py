@@ -11,7 +11,15 @@ from app.database import get_db
 from app.models import JobStatus, VideoCodec, VideoJob, VideoPreset
 from app.schemas import VideoJobListResponse, VideoJobResponse, VideoUploadResponse
 from app.services.video_processor import ffmpeg_bin, ffprobe_bin
-from app.uploads import check_capacity, delete_files, downloadable_path, require_admin, save_upload
+from app.auth import User, current_user
+from app.uploads import (
+    check_capacity,
+    delete_files,
+    downloadable_path,
+    get_owned_job,
+    save_upload,
+    visible_jobs,
+)
 from app.workers.tasks import process_video_task
 
 router = APIRouter(prefix="/video", tags=["video"])
@@ -33,6 +41,7 @@ async def upload_videos(
     ),
     mute: bool = Query(False, description="Drop the audio track entirely"),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     if not ffmpeg_bin() or not ffprobe_bin():
         raise HTTPException(503, "Video compression unavailable: ffmpeg is not installed")
@@ -67,6 +76,7 @@ async def upload_videos(
 
             job = VideoJob(
                 id=job_id,
+                owner_email=user.email,
                 original_filename=file.filename or "upload",
                 original_path=str(upload_path),
                 status=JobStatus.PENDING,
@@ -99,18 +109,18 @@ async def upload_videos(
 
 
 @router.get("/status/{job_id}", response_model=VideoJobResponse)
-def get_status(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(VideoJob, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+def get_status(
+    job_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)
+):
+    job = get_owned_job(db, VideoJob, job_id, user)
     return VideoJobResponse.model_validate(job)
 
 
 @router.get("/download/{job_id}")
-def download_video(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(VideoJob, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+def download_video(
+    job_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)
+):
+    job = get_owned_job(db, VideoJob, job_id, user)
 
     processed_path = downloadable_path(
         job, f"Not ready yet — current status: {job.status} ({job.progress_percent}%)"
@@ -122,15 +132,19 @@ def download_video(job_id: str, db: Session = Depends(get_db)):
     return FileResponse(processed_path, filename=filename)
 
 
-@router.get("/jobs", response_model=VideoJobListResponse, dependencies=[Depends(require_admin)])
+@router.get("/jobs", response_model=VideoJobListResponse)
 def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    all_users: bool = Query(False, alias="all", description="Admins only: list every user's jobs"),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
-    total = db.query(VideoJob).count()
+    """The signed-in user's jobs, newest first."""
+    query = visible_jobs(db, VideoJob, user, all_users)
+    total = query.count()
     jobs = (
-        db.query(VideoJob)
+        query
         .order_by(VideoJob.created_at.desc())
         .offset(offset)
         .limit(limit)

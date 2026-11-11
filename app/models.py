@@ -60,6 +60,8 @@ class ImageJob(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     original_filename = Column(String(255), nullable=False)
+    # Google account that created the job; NULL on jobs from before sign-in existed
+    owner_email = Column(String(255), index=True)
     original_path = Column(String(500))
     processed_path = Column(String(500))
     status = Column(
@@ -88,6 +90,8 @@ class VideoJob(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     original_filename = Column(String(255), nullable=False)
+    # Google account that created the job; NULL on jobs from before sign-in existed
+    owner_email = Column(String(255), index=True)
     original_path = Column(String(500))
     processed_path = Column(String(500))
     status = Column(
@@ -124,6 +128,8 @@ class PdfJob(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     original_filename = Column(String(255), nullable=False)
+    # Google account that created the job; NULL on jobs from before sign-in existed
+    owner_email = Column(String(255), index=True)
     original_path = Column(String(500))
     processed_path = Column(String(500))
     status = Column(

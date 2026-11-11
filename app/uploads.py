@@ -2,14 +2,14 @@
 
 import logging
 import os
-import secrets
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import Header, HTTPException, UploadFile
+from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import User
 from app.config import settings
 from app.models import ImageJob, JobStatus, PdfJob, VideoJob
 
@@ -65,16 +65,21 @@ def check_capacity(db: Session, model: type, max_queued: int, incoming: int) -> 
         raise HTTPException(503, "Server is low on storage. Try again later.")
 
 
-def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
-    """Guard for endpoints that expose every job (filenames + downloadable IDs).
+def get_owned_job(db: Session, model: type, job_id: str, user: User):
+    """Fetch a job the user may see. Someone else's job answers 404, not 403, so job
+    IDs can't be probed for existence."""
+    job = db.get(model, job_id)
+    if not job or (job.owner_email != user.email and not user.is_admin):
+        raise HTTPException(404, "Job not found")
+    return job
 
-    With ADMIN_API_KEY unset the endpoints are disabled outright and answer 404, so a
-    forgotten setting fails closed.
-    """
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(404, "Not found")
-    if not x_admin_key or not secrets.compare_digest(x_admin_key, settings.ADMIN_API_KEY):
-        raise HTTPException(401, "Invalid admin key")
+
+def visible_jobs(db: Session, model: type, user: User, all_users: bool):
+    """Query for a listing: the user's own jobs, or every job for an admin who asks."""
+    query = db.query(model)
+    if not (all_users and user.is_admin):
+        query = query.filter(model.owner_email == user.email)
+    return query
 
 
 def downloadable_path(job: ImageJob | PdfJob | VideoJob, not_ready_detail: str) -> str:

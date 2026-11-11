@@ -62,20 +62,32 @@ docker compose up --build
 | POST | `/images/upload` | Upload 1-20 images; query params: `format` (webp/avif/original), `width` (int), `quality` (50-100, default 85; 100 = lossless) |
 | GET | `/images/status/{id}` | Poll job status |
 | GET | `/images/download/{id}` | Download processed image (re-downloadable for `DOWNLOAD_GRACE_MINUTES`, then deleted) |
-| GET | `/images/jobs` | List all jobs (query: `limit`, `offset`; admin only, `X-Admin-Key`) |
+| GET | `/images/jobs` | List your jobs (query: `limit`, `offset`; admins add `all=true` for everyone's) |
 | POST | `/pdf/upload` | Upload 1-20 PDFs; query param: `level` (screen/ebook/printer/lossless) |
 | GET | `/pdf/status/{id}` | Poll PDF job status |
 | GET | `/pdf/download/{id}` | Download compressed PDF (same grace window as images) |
-| GET | `/pdf/jobs` | List all PDF jobs (query: `limit`, `offset`; admin only) |
+| GET | `/pdf/jobs` | List your PDF jobs (same query params as images) |
 | POST | `/video/upload` | Upload 1-5 videos; query params: `preset` (low/balanced/high), `codec` (h264/vp9/av1), `width` (int), `mute` (bool) |
 | GET | `/video/status/{id}` | Poll video job status (includes `progress_percent`) |
 | GET | `/video/download/{id}` | Download compressed video (same grace window as images) |
-| GET | `/video/jobs` | List all video jobs (query: `limit`, `offset`; admin only) |
-| GET | `/health` | Health check |
+| GET | `/video/jobs` | List your video jobs (same query params as images) |
+| GET | `/auth/login` | Start Google sign-in; `next` = frontend path to return to |
+| GET | `/auth/callback` | Google redirect target; sets the session cookie |
+| GET | `/auth/me` | Signed-in user (`email`, `name`, `is_admin`) or 401 |
+| POST | `/auth/logout` | Clear the session cookie |
+| GET | `/health` | Health check (public) |
+
+### Authentication
+
+Every endpoint except `/health` and `/auth/*` needs a signed-in Google Workspace account whose `hd` (hosted domain) claim is in `ALLOWED_DOMAINS`; personal Gmail accounts have no `hd` and are always refused. `app/auth.py` runs the OAuth code flow itself and keeps the session in a signed httpOnly cookie on `SESSION_COOKIE_DOMAIN`, so the frontend, API and upload hosts must share that parent domain. No extra packages: HMAC-SHA256 signs cookies, and the ID token comes straight from Google's token endpoint over TLS.
+
+- Jobs record `owner_email`. Status, download and listings only show your own jobs (404 otherwise); `ADMIN_EMAILS` can list everyone's with `?all=true`. Jobs from before migration 005 have no owner and are visible to admins only.
+- `UploadAuthMiddleware` rejects anonymous `POST */upload` before the body is read (FastAPI parses multipart bodies before dependencies run); nginx streams upload bodies for the same reason.
+- POSTs with an `Origin` outside `CORS_ORIGINS` get 403 — SameSite=Lax alone lets sibling subdomains through.
+- The API refuses to start with auth settings missing or `CORS_ORIGINS=["*"]`. For local dev without Google, set `DEBUG=true` and `AUTH_DISABLED=true` (everything runs as an admin dev user).
 
 ### Abuse limits
 
-- **`/*/jobs` listings** expose every user's filenames and downloadable job IDs, so they answer 404 unless `ADMIN_API_KEY` is set, and 401 without a matching `X-Admin-Key` header.
 - **Per-IP upload rate limits** live in nginx (`limit_req` zones in `nginx/nginx.conf`). Behind Cloudflare they need `nginx/cloudflare-realip.conf` copied to `/etc/nginx/snippets/`, or every visitor shares the few Cloudflare edge IPs.
 - **Capacity backstop** in the app: uploads get 503 when `MAX_QUEUED_JOBS` / `MAX_QUEUED_VIDEOS` jobs are pending or processing, or free disk falls below `MIN_FREE_DISK_MB`.
 - **Uploads stream to disk** for every type and are sniffed from their bytes (Pillow for images, `%PDF-` header for PDFs; ffprobe in the worker for video). Corrupt inputs fail without retries.

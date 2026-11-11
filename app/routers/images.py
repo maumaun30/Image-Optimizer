@@ -11,7 +11,15 @@ from app.config import settings
 from app.database import get_db
 from app.models import ImageJob, JobStatus, OutputFormat
 from app.schemas import JobListResponse, JobResponse, UploadResponse
-from app.uploads import check_capacity, delete_files, downloadable_path, require_admin, save_upload
+from app.auth import User, current_user
+from app.uploads import (
+    check_capacity,
+    delete_files,
+    downloadable_path,
+    get_owned_job,
+    save_upload,
+    visible_jobs,
+)
 from app.workers.tasks import process_image_task
 
 router = APIRouter(prefix="/images", tags=["images"])
@@ -57,6 +65,7 @@ async def upload_images(
         description="Compression quality: 50 = max compression … 100 = lossless",
     ),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     if not files:
         raise HTTPException(400, "No files provided")
@@ -87,6 +96,7 @@ async def upload_images(
 
             job = ImageJob(
                 id=job_id,
+                owner_email=user.email,
                 original_filename=file.filename or "upload",
                 original_path=str(upload_path),
                 status=JobStatus.PENDING,
@@ -118,18 +128,18 @@ async def upload_images(
 
 
 @router.get("/status/{job_id}", response_model=JobResponse)
-def get_status(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(ImageJob, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+def get_status(
+    job_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)
+):
+    job = get_owned_job(db, ImageJob, job_id, user)
     return JobResponse.model_validate(job)
 
 
 @router.get("/download/{job_id}")
-def download_image(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(ImageJob, job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+def download_image(
+    job_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)
+):
+    job = get_owned_job(db, ImageJob, job_id, user)
 
     processed_path = downloadable_path(job, f"Not ready yet — current status: {job.status}")
     db.commit()
@@ -139,15 +149,19 @@ def download_image(job_id: str, db: Session = Depends(get_db)):
     return FileResponse(processed_path, filename=filename)
 
 
-@router.get("/jobs", response_model=JobListResponse, dependencies=[Depends(require_admin)])
+@router.get("/jobs", response_model=JobListResponse)
 def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    all_users: bool = Query(False, alias="all", description="Admins only: list every user's jobs"),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
-    total = db.query(ImageJob).count()
+    """The signed-in user's jobs, newest first."""
+    query = visible_jobs(db, ImageJob, user, all_users)
+    total = query.count()
     jobs = (
-        db.query(ImageJob)
+        query
         .order_by(ImageJob.created_at.desc())
         .offset(offset)
         .limit(limit)
